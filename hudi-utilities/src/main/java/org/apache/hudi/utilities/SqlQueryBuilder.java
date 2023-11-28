@@ -20,7 +20,6 @@
 package org.apache.hudi.utilities;
 
 import org.apache.hudi.common.util.StringUtils;
-import org.apache.hudi.utilities.util.CheckWhere;
 
 /**
  * SQL query builder. Current support for: SELECT, FROM, JOIN, ON, WHERE, ORDER BY, LIMIT clauses.
@@ -106,7 +105,6 @@ public class SqlQueryBuilder {
     }
     sqlBuilder.append(" where ");
     sqlBuilder.append(predicate);
-    CheckWhere.checkWhere(sqlBuilder.toString());
     return this;
   }
 
