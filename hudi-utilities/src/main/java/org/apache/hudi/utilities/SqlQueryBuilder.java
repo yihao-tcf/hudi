@@ -20,6 +20,7 @@
 package org.apache.hudi.utilities;
 
 import org.apache.hudi.common.util.StringUtils;
+import org.apache.hudi.utilities.util.CheckWhere;
 
 /**
  * SQL query builder. Current support for: SELECT, FROM, JOIN, ON, WHERE, ORDER BY, LIMIT clauses.
@@ -105,6 +106,7 @@ public class SqlQueryBuilder {
     }
     sqlBuilder.append(" where ");
     sqlBuilder.append(predicate);
+    CheckWhere.checkWhere(sqlBuilder.toString());
     return this;
   }
 
@@ -120,6 +122,21 @@ public class SqlQueryBuilder {
       throw new IllegalArgumentException("No columns provided with ORDER BY clause. Please provide a column name to order records.");
     }
     sqlBuilder.append(" order by ");
+    sqlBuilder.append(String.join(", ", columns));
+    return this;
+  }
+
+  /**
+   * Appends a groupBy clause to a query.
+   *
+   * @param columns Column names to order by.
+   * @return The {@link SqlQueryBuilder} instance.
+   */
+  public SqlQueryBuilder groupBy(String... columns) {
+    if (columns == null || columns.length == 0) {
+      throw new IllegalArgumentException("No columns provided with ORDER BY clause. Please provide a column name to order records.");
+    }
+    sqlBuilder.append(" group by ");
     sqlBuilder.append(String.join(", ", columns));
     return this;
   }
