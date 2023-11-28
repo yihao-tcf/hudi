@@ -125,6 +125,21 @@ public class SqlQueryBuilder {
   }
 
   /**
+   * Appends a groupBy clause to a query.
+   *
+   * @param columns Column names to order by.
+   * @return The {@link SqlQueryBuilder} instance.
+   */
+  public SqlQueryBuilder groupBy(String... columns) {
+    if (columns == null || columns.length == 0) {
+      throw new IllegalArgumentException("No columns provided with ORDER BY clause. Please provide a column name to order records.");
+    }
+    sqlBuilder.append(" group by ");
+    sqlBuilder.append(String.join(", ", columns));
+    return this;
+  }
+
+  /**
    * Appends a "limit" clause to a query.
    *
    * @param count The limit count.
