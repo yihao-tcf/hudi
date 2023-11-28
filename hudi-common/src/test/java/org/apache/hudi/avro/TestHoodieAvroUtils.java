@@ -73,6 +73,7 @@ import static org.apache.hudi.avro.HoodieAvroUtils.getNestedFieldSchemaFromWrite
 import static org.apache.hudi.avro.HoodieAvroUtils.sanitizeName;
 import static org.apache.hudi.avro.HoodieAvroUtils.unwrapAvroValueWrapper;
 import static org.apache.hudi.avro.HoodieAvroUtils.wrapValueIntoAvro;
+import static org.apache.hudi.common.util.StringUtils.getUTF8Bytes;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -294,7 +295,7 @@ public class TestHoodieAvroUtils {
     // partitioned table test.
     String schemaStr = "{\"type\": \"record\",\"name\": \"testrec\",\"fields\": [ "
         + "{\"name\": \"timestamp\",\"type\": \"double\"},{\"name\": \"_row_key\", \"type\": \"string\"},"
-        + "{\"name\": \"non_pii_col\", \"type\": \"string\"}]},";
+        + "{\"name\": \"non_pii_col\", \"type\": \"string\"}]}";
     Schema expectedSchema = new Schema.Parser().parse(schemaStr);
     GenericRecord rec = new GenericData.Record(new Schema.Parser().parse(EXAMPLE_SCHEMA));
     rec.put("_row_key", "key1");
@@ -317,7 +318,7 @@ public class TestHoodieAvroUtils {
     schemaStr = "{\"type\": \"record\",\"name\": \"testrec\",\"fields\": [ "
         + "{\"name\": \"timestamp\",\"type\": \"double\"},{\"name\": \"_row_key\", \"type\": \"string\"},"
         + "{\"name\": \"non_pii_col\", \"type\": \"string\"},"
-        + "{\"name\": \"pii_col\", \"type\": \"string\"}]},";
+        + "{\"name\": \"pii_col\", \"type\": \"string\"}]}";
     expectedSchema = new Schema.Parser().parse(schemaStr);
     rec1 = HoodieAvroUtils.removeFields(rec, Collections.singleton(""));
     assertEquals(expectedSchema, rec1.getSchema());
@@ -522,7 +523,7 @@ public class TestHoodieAvroUtils {
     expectedWrapperClass.put("bytesField", BytesWrapper.class);
     record.put("stringField", "abcdefghijk");
     expectedWrapperClass.put("stringField", StringWrapper.class);
-    record.put("decimalField", ByteBuffer.wrap("9213032.4966".getBytes()));
+    record.put("decimalField", ByteBuffer.wrap(getUTF8Bytes("9213032.4966")));
     expectedWrapperClass.put("decimalField", BytesWrapper.class);
     record.put("timeMillisField", 57996136);
     expectedWrapperClass.put("timeMillisField", IntWrapper.class);

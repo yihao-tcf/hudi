@@ -19,7 +19,7 @@ package org.apache.spark.sql.hudi
 
 import org.apache.hudi.DataSourceWriteOptions
 import org.apache.hudi.avro.HoodieAvroUtils.getRootLevelFieldName
-import org.apache.hudi.common.model.HoodieRecordMerger
+import org.apache.hudi.common.model.{HoodieRecordMerger, HoodieTableType}
 import org.apache.hudi.common.table.HoodieTableConfig
 import org.apache.hudi.common.util.ValidationUtils
 import org.apache.spark.sql.SparkSession
@@ -69,6 +69,13 @@ object HoodieOptionConfig {
     .defaultValue(DataSourceWriteOptions.PAYLOAD_CLASS_NAME.defaultValue())
     .build()
 
+  val SQL_PAYLOAD_TYPE: HoodieSQLOption[String] = buildConf()
+    .withSqlKey("payloadType")
+    .withHoodieKey(DataSourceWriteOptions.PAYLOAD_TYPE.key)
+    .withTableConfigKey(HoodieTableConfig.PAYLOAD_TYPE.key)
+    .defaultValue(DataSourceWriteOptions.PAYLOAD_TYPE.defaultValue())
+    .build()
+
   val SQL_RECORD_MERGER_STRATEGY: HoodieSQLOption[String] = buildConf()
     .withSqlKey("recordMergerStrategy")
     .withHoodieKey(DataSourceWriteOptions.RECORD_MERGER_STRATEGY.key)
@@ -109,12 +116,12 @@ object HoodieOptionConfig {
   /**
    * Mapping of the short sql value to the hoodie's config value
    */
-  private val sqlOptionValueToWriteConfigValue: Map[String, String] = Map (
-    SQL_VALUE_TABLE_TYPE_COW -> DataSourceWriteOptions.COW_TABLE_TYPE_OPT_VAL,
-    SQL_VALUE_TABLE_TYPE_MOR -> DataSourceWriteOptions.MOR_TABLE_TYPE_OPT_VAL
+  private val sqlOptionValueToHoodieConfigValue: Map[String, String] = Map (
+    SQL_VALUE_TABLE_TYPE_COW -> HoodieTableType.COPY_ON_WRITE.name,
+    SQL_VALUE_TABLE_TYPE_MOR -> HoodieTableType.MERGE_ON_READ.name
   )
 
-  private lazy val writeConfigValueToSqlOptionValue = sqlOptionValueToWriteConfigValue.map(f => f._2 -> f._1)
+  private lazy val hoodieConfigValueToSqlOptionValue = sqlOptionValueToHoodieConfigValue.map(f => f._2 -> f._1)
 
   def withDefaultSqlOptions(options: Map[String, String]): Map[String, String] = defaultSqlOptions ++ options
 
@@ -123,14 +130,22 @@ object HoodieOptionConfig {
    */
   def mapSqlOptionsToDataSourceWriteConfigs(options: Map[String, String]): Map[String, String] = {
     options.map (kv =>
-      sqlOptionKeyToWriteConfigKey.getOrElse(kv._1, kv._1) -> sqlOptionValueToWriteConfigValue.getOrElse(kv._2, kv._2))
+      sqlOptionKeyToWriteConfigKey.getOrElse(kv._1, kv._1) -> sqlOptionValueToHoodieConfigValue.getOrElse(kv._2, kv._2))
   }
 
   /**
-   * Mapping the data source write configs to SQL options.
+   * Mapping the hoodie configs (including data source write configs and hoodie table configs) to SQL options.
    */
-  def mapDataSourceWriteOptionsToSqlOptions(options: Map[String, String]): Map[String, String] = {
-    options.map(kv => writeConfigKeyToSqlOptionKey.getOrElse(kv._1, kv._1) -> writeConfigValueToSqlOptionValue.getOrElse(kv._2, kv._2))
+  def mapHoodieConfigsToSqlOptions(options: Map[String, String]): Map[String, String] = {
+    options.map { case (k, v) =>
+      if (writeConfigKeyToSqlOptionKey.contains(k)) {
+        writeConfigKeyToSqlOptionKey(k) -> hoodieConfigValueToSqlOptionValue.getOrElse(v, v)
+      } else if (tableConfigKeyToSqlOptionKey.contains(k)) {
+        tableConfigKeyToSqlOptionKey(k) -> hoodieConfigValueToSqlOptionValue.getOrElse(v, v)
+      } else {
+        k -> v
+      }
+    }
   }
 
   /**
@@ -139,18 +154,11 @@ object HoodieOptionConfig {
   def mapSqlOptionsToTableConfigs(options: Map[String, String]): Map[String, String] = {
     options.map { case (k, v) =>
       if (sqlOptionKeyToTableConfigKey.contains(k)) {
-        sqlOptionKeyToTableConfigKey(k) -> sqlOptionValueToWriteConfigValue.getOrElse(v, v)
+        sqlOptionKeyToTableConfigKey(k) -> sqlOptionValueToHoodieConfigValue.getOrElse(v, v)
       } else {
         k -> v
       }
     }
-  }
-
-  /**
-   * Map table configs to SQL options.
-   */
-  def mapTableConfigsToSqlOptions(options: Map[String, String]): Map[String, String] = {
-    options.map(kv => tableConfigKeyToSqlOptionKey.getOrElse(kv._1, kv._1) -> writeConfigValueToSqlOptionValue.getOrElse(kv._2, kv._2))
   }
 
   val defaultSqlOptions: Map[String, String] = {
@@ -192,8 +200,8 @@ object HoodieOptionConfig {
 
   // extract primaryKey, preCombineField, type options
   def extractSqlOptions(options: Map[String, String]): Map[String, String] = {
-    val sqlOptions = mapTableConfigsToSqlOptions(options)
-    val targetOptions = sqlOptionKeyToWriteConfigKey.keySet -- Set(SQL_PAYLOAD_CLASS.sqlKeyName) -- Set(SQL_RECORD_MERGER_STRATEGY.sqlKeyName)
+    val sqlOptions = mapHoodieConfigsToSqlOptions(options)
+    val targetOptions = sqlOptionKeyToWriteConfigKey.keySet -- Set(SQL_PAYLOAD_CLASS.sqlKeyName) -- Set(SQL_RECORD_MERGER_STRATEGY.sqlKeyName) -- Set(SQL_PAYLOAD_TYPE.sqlKeyName)
     sqlOptions.filterKeys(targetOptions.contains)
   }
 
@@ -233,7 +241,7 @@ object HoodieOptionConfig {
   def makeOptionsCaseInsensitive(sqlOptions: Map[String, String]): Map[String, String] = {
     // Make Keys Case Insensitive
     val standardOptions = Seq(SQL_KEY_TABLE_PRIMARY_KEY, SQL_KEY_PRECOMBINE_FIELD,
-    SQL_KEY_TABLE_TYPE, SQL_PAYLOAD_CLASS, SQL_RECORD_MERGER_STRATEGY).map(key => key.sqlKeyName)
+    SQL_KEY_TABLE_TYPE, SQL_PAYLOAD_CLASS, SQL_RECORD_MERGER_STRATEGY, SQL_PAYLOAD_TYPE).map(key => key.sqlKeyName)
 
     sqlOptions.map(option => {
       standardOptions.find(x => x.toLowerCase().contains(option._1.toLowerCase())) match {

@@ -25,7 +25,6 @@ import org.apache.hudi.avro.model.HoodieRequestedReplaceMetadata;
 import org.apache.hudi.client.HoodieFlinkWriteClient;
 import org.apache.hudi.common.model.WriteOperationType;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
-import org.apache.hudi.common.table.timeline.HoodieActiveTimeline;
 import org.apache.hudi.common.table.timeline.HoodieInstant;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
 import org.apache.hudi.common.table.timeline.TimelineMetadataUtils;
@@ -38,6 +37,8 @@ import org.apache.hudi.util.ClusteringUtil;
 import org.apache.hudi.util.FlinkTables;
 import org.apache.hudi.util.FlinkWriteClients;
 import org.apache.hudi.util.StreamerUtil;
+
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -70,6 +71,13 @@ public class TestClusteringUtil {
 
   void beforeEach() throws IOException {
     beforeEach(Collections.emptyMap());
+  }
+
+  @AfterEach
+  void afterEach() {
+    if (this.writeClient != null) {
+      this.writeClient.close();
+    }
   }
 
   void beforeEach(Map<String, String> options) throws IOException {
@@ -115,7 +123,7 @@ public class TestClusteringUtil {
         HoodieClusteringStrategy.newBuilder().build(), Collections.emptyMap(), 1, false);
     HoodieRequestedReplaceMetadata metadata = new HoodieRequestedReplaceMetadata(WriteOperationType.CLUSTER.name(),
         plan, Collections.emptyMap(), 1);
-    String instantTime = HoodieActiveTimeline.createNewInstantTime();
+    String instantTime = table.getMetaClient().createNewInstantTime();
     HoodieInstant clusteringInstant =
         new HoodieInstant(HoodieInstant.State.REQUESTED, HoodieTimeline.REPLACE_COMMIT_ACTION, instantTime);
     try {

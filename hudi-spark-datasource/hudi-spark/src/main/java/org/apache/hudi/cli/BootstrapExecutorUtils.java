@@ -21,6 +21,7 @@ package org.apache.hudi.cli;
 import org.apache.hudi.DataSourceWriteOptions;
 import org.apache.hudi.client.SparkRDDWriteClient;
 import org.apache.hudi.client.common.HoodieSparkEngineContext;
+import org.apache.hudi.common.config.HoodieConfig;
 import org.apache.hudi.common.config.TypedProperties;
 import org.apache.hudi.common.model.HoodieTimelineTimeZone;
 import org.apache.hudi.common.table.HoodieTableConfig;
@@ -41,6 +42,7 @@ import org.apache.hudi.keygen.NonpartitionedKeyGenerator;
 import org.apache.hudi.keygen.SimpleKeyGenerator;
 import org.apache.hudi.keygen.TimestampBasedAvroKeyGenerator;
 import org.apache.hudi.keygen.TimestampBasedKeyGenerator;
+import org.apache.hudi.keygen.constant.KeyGeneratorType;
 import org.apache.hudi.keygen.factory.HoodieSparkKeyGeneratorFactory;
 import org.apache.hudi.util.SparkKeyGenUtils;
 
@@ -73,6 +75,7 @@ import static org.apache.hudi.keygen.constant.KeyGeneratorOptions.URL_ENCODE_PAR
 import static org.apache.hudi.sync.common.HoodieSyncConfig.META_SYNC_BASE_FILE_FORMAT;
 import static org.apache.hudi.sync.common.HoodieSyncConfig.META_SYNC_BASE_PATH;
 import static org.apache.hudi.sync.common.HoodieSyncConfig.META_SYNC_DATABASE_NAME;
+import static org.apache.hudi.sync.common.HoodieSyncConfig.META_SYNC_TABLE_NAME;
 
 /**
  * Performs bootstrap from a non-hudi source.
@@ -194,6 +197,7 @@ public class BootstrapExecutorUtils implements Serializable {
       TypedProperties metaProps = new TypedProperties();
       metaProps.putAll(props);
       metaProps.put(META_SYNC_DATABASE_NAME.key(), cfg.database);
+      metaProps.put(META_SYNC_TABLE_NAME.key(), cfg.tableName);
       metaProps.put(META_SYNC_BASE_PATH.key(), cfg.basePath);
       metaProps.put(META_SYNC_BASE_FILE_FORMAT.key(), cfg.baseFileFormat);
       if (props.getBoolean(HIVE_SYNC_BUCKET_SYNC.key(), HIVE_SYNC_BUCKET_SYNC.defaultValue())) {
@@ -249,8 +253,8 @@ public class BootstrapExecutorUtils implements Serializable {
             URL_ENCODE_PARTITIONING.key(),
             Boolean.parseBoolean(URL_ENCODE_PARTITIONING.defaultValue())))
         .setCommitTimezone(HoodieTimelineTimeZone.valueOf(props.getString(
-                TIMELINE_TIMEZONE.key(),
-                String.valueOf(TIMELINE_TIMEZONE.defaultValue()))))
+            TIMELINE_TIMEZONE.key(),
+            String.valueOf(TIMELINE_TIMEZONE.defaultValue()))))
         .setPartitionMetafileUseBaseFormat(props.getBoolean(
             PARTITION_METAFILE_USE_BASE_FORMAT.key(),
             PARTITION_METAFILE_USE_BASE_FORMAT.defaultValue()))
@@ -268,7 +272,7 @@ public class BootstrapExecutorUtils implements Serializable {
     } else if (StringUtils.nonEmpty(props.getString(HoodieWriteConfig.KEYGENERATOR_TYPE.key(), null))) {
       keyGenClass = HoodieSparkKeyGeneratorFactory.getKeyGeneratorClassName(props);
     } else {
-      keyGenClass = props.getString(HoodieTableConfig.KEY_GENERATOR_CLASS_NAME.key(), SimpleKeyGenerator.class.getName());
+      keyGenClass = KeyGeneratorType.getKeyGeneratorClassName(new HoodieConfig(props));
     }
     props.put(HoodieWriteConfig.KEYGENERATOR_CLASS_NAME.key(), keyGenClass);
     String partitionColumns = SparkKeyGenUtils.getPartitionColumns(props);

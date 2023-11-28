@@ -41,7 +41,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
@@ -54,6 +53,7 @@ import java.util.regex.Pattern;
 
 import static org.apache.hudi.common.util.ConfigUtils.checkRequiredConfigProperties;
 import static org.apache.hudi.common.util.ConfigUtils.getStringWithAltKeys;
+import static org.apache.hudi.common.util.StringUtils.getUTF8Bytes;
 
 /**
  * Obtains latest schema from the Confluent/Kafka schema-registry.
@@ -149,7 +149,7 @@ public class SchemaRegistryProvider extends SchemaProvider {
   }
 
   protected void setAuthorizationHeader(String creds, HttpURLConnection connection) {
-    String encodedAuth = Base64.getEncoder().encodeToString(creds.getBytes(StandardCharsets.UTF_8));
+    String encodedAuth = Base64.getEncoder().encodeToString(getUTF8Bytes(creds));
     connection.setRequestProperty("Authorization", "Basic " + encodedAuth);
   }
 
@@ -195,7 +195,10 @@ public class SchemaRegistryProvider extends SchemaProvider {
     try {
       return parseSchemaFromRegistry(registryUrl);
     } catch (Exception e) {
-      throw new HoodieSchemaFetchException("Error reading source schema from registry :" + registryUrl, e);
+      throw new HoodieSchemaFetchException(String.format(
+          "Error reading source schema from registry. Please check %s is configured correctly. Truncated URL: %s",
+          Config.SRC_SCHEMA_REGISTRY_URL_PROP,
+          StringUtils.truncate(registryUrl, 10, 10)), e);
     }
   }
 
@@ -207,7 +210,11 @@ public class SchemaRegistryProvider extends SchemaProvider {
     try {
       return parseSchemaFromRegistry(targetRegistryUrl);
     } catch (Exception e) {
-      throw new HoodieSchemaFetchException("Error reading target schema from registry :" + targetRegistryUrl, e);
+      throw new HoodieSchemaFetchException(String.format(
+          "Error reading target schema from registry. Please check %s is configured correctly. If that is not configured then check %s. Truncated URL: %s",
+          Config.SRC_SCHEMA_REGISTRY_URL_PROP,
+          Config.TARGET_SCHEMA_REGISTRY_URL_PROP,
+          StringUtils.truncate(targetRegistryUrl, 10, 10)), e);
     }
   }
 }

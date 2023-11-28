@@ -24,7 +24,6 @@ import org.apache.hudi.common.fs.FSUtils;
 import org.apache.hudi.common.model.DefaultHoodieRecordPayload;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.TableSchemaResolver;
-import org.apache.hudi.common.table.timeline.HoodieActiveTimeline;
 import org.apache.hudi.common.util.CollectionUtils;
 import org.apache.hudi.common.util.StringUtils;
 import org.apache.hudi.config.HoodieWriteConfig;
@@ -124,6 +123,16 @@ public class HoodieCatalog extends AbstractCatalog {
       }
     } catch (IOException e) {
       throw new CatalogException(String.format("Checking catalog path %s exists exception.", catalogPathStr), e);
+    }
+
+    if (!databaseExists(getDefaultDatabase())) {
+      LOG.info("Creating database {} automatically because it does not exist.", getDefaultDatabase());
+      Path dbPath = new Path(catalogPath, getDefaultDatabase());
+      try {
+        fs.mkdirs(dbPath);
+      } catch (IOException e) {
+        throw new CatalogException(String.format("Creating database %s exception.", getDefaultDatabase()), e);
+      }
     }
   }
 
@@ -466,7 +475,8 @@ public class HoodieCatalog extends AbstractCatalog {
     // enable auto-commit though ~
     options.put(HoodieWriteConfig.AUTO_COMMIT_ENABLE.key(), "true");
     try (HoodieFlinkWriteClient<?> writeClient = createWriteClient(options, tablePathStr, tablePath)) {
-      writeClient.deletePartitions(Collections.singletonList(partitionPathStr), HoodieActiveTimeline.createNewInstantTime())
+      writeClient.deletePartitions(Collections.singletonList(partitionPathStr),
+              writeClient.createNewInstantTime())
           .forEach(writeStatus -> {
             if (writeStatus.hasErrors()) {
               throw new HoodieMetadataException(String.format("Failed to commit metadata table records at file id %s.", writeStatus.getFileId()));

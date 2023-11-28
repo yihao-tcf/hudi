@@ -21,6 +21,7 @@ package org.apache.hudi.common.util;
 import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -103,6 +104,10 @@ public class StringUtils {
     return out;
   }
 
+  public static byte[] getUTF8Bytes(String str) {
+    return str.getBytes(StandardCharsets.UTF_8);
+  }
+
   public static boolean isNullOrEmpty(String str) {
     return str == null || str.length() == 0;
   }
@@ -167,5 +172,15 @@ public class StringUtils {
       return input;
     }
     return input.substring(0, i);
+  }
+
+  public static String truncate(String str, int headLength, int tailLength) {
+    if (isNullOrEmpty(str) || str.length() <= headLength + tailLength) {
+      return str;
+    }
+    String head = str.substring(0, headLength);
+    String tail = str.substring(str.length() - tailLength);
+
+    return head + "..." + tail;
   }
 }

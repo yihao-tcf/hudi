@@ -67,6 +67,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
 import static org.apache.hudi.aws.utils.S3Utils.s3aToS3;
@@ -80,6 +81,7 @@ import static org.apache.hudi.hive.util.HiveSchemaUtil.parquetSchemaToMapSchema;
 import static org.apache.hudi.sync.common.HoodieSyncConfig.META_SYNC_DATABASE_NAME;
 import static org.apache.hudi.sync.common.HoodieSyncConfig.META_SYNC_PARTITION_FIELDS;
 import static org.apache.hudi.sync.common.util.TableUtils.tableId;
+import org.apache.hudi.aws.credentials.HoodieAWSCredentialsProviderFactory;
 
 /**
  * This class implements all the AWS APIs to enable syncing of a Hudi Table with the
@@ -91,6 +93,7 @@ public class AWSGlueCatalogSyncClient extends HoodieSyncClient {
 
   private static final Logger LOG = LoggerFactory.getLogger(AWSGlueCatalogSyncClient.class);
   private static final int MAX_PARTITIONS_PER_REQUEST = 100;
+  private static final int MAX_DELETE_PARTITIONS_PER_REQUEST = 25;
   private final GlueAsyncClient awsGlue;
   private static final long BATCH_REQUEST_SLEEP_MILLIS = 1000L;
   /**
@@ -105,7 +108,9 @@ public class AWSGlueCatalogSyncClient extends HoodieSyncClient {
 
   public AWSGlueCatalogSyncClient(HiveSyncConfig config) {
     super(config);
-    this.awsGlue = GlueAsyncClient.builder().build();
+    this.awsGlue = GlueAsyncClient.builder()
+            .credentialsProvider(HoodieAWSCredentialsProviderFactory.getAwsCredentialsProvider(config.getProps()))
+            .build();
     this.databaseName = config.getStringOrDefault(META_SYNC_DATABASE_NAME);
     this.skipTableArchive = config.getBooleanOrDefault(GlueCatalogSyncClientConfig.GLUE_SKIP_TABLE_ARCHIVE);
     this.enableMetadataTable = Boolean.toString(config.getBoolean(GLUE_METADATA_FILE_LISTING)).toUpperCase();
@@ -222,7 +227,7 @@ public class AWSGlueCatalogSyncClient extends HoodieSyncClient {
     LOG.info("Drop " + partitionsToDrop.size() + "partition(s) in table " + tableId(databaseName, tableName));
     try {
       List<CompletableFuture<BatchDeletePartitionResponse>> futures = new ArrayList<>();
-      for (List<String> batch : CollectionUtils.batches(partitionsToDrop, MAX_PARTITIONS_PER_REQUEST)) {
+      for (List<String> batch : CollectionUtils.batches(partitionsToDrop, MAX_DELETE_PARTITIONS_PER_REQUEST)) {
 
         List<PartitionValueList> partitionValueLists = batch.stream().map(partition -> {
           PartitionValueList partitionValueList = PartitionValueList.builder()
@@ -456,9 +461,13 @@ public class AWSGlueCatalogSyncClient extends HoodieSyncClient {
         .build();
     try {
       return Objects.nonNull(awsGlue.getTable(request).get().table());
-    } catch (EntityNotFoundException e) {
-      LOG.info("Table not found: " + tableId(databaseName, tableName), e);
-      return false;
+    } catch (ExecutionException e) {
+      if (e.getCause() instanceof EntityNotFoundException) {
+        LOG.info("Table not found: " + tableId(databaseName, tableName), e);
+        return false;
+      } else {
+        throw new HoodieGlueSyncException("Fail to get table: " + tableId(databaseName, tableName), e);
+      }
     } catch (Exception e) {
       throw new HoodieGlueSyncException("Fail to get table: " + tableId(databaseName, tableName), e);
     }
@@ -469,9 +478,13 @@ public class AWSGlueCatalogSyncClient extends HoodieSyncClient {
     GetDatabaseRequest request = GetDatabaseRequest.builder().name(databaseName).build();
     try {
       return Objects.nonNull(awsGlue.getDatabase(request).get().database());
-    } catch (EntityNotFoundException e) {
-      LOG.info("Database not found: " + databaseName, e);
-      return false;
+    } catch (ExecutionException e) {
+      if (e.getCause() instanceof EntityNotFoundException) {
+        LOG.info("Database not found: " + databaseName, e);
+        return false;
+      } else {
+        throw new HoodieGlueSyncException("Fail to check if database exists " + databaseName, e);
+      }
     } catch (Exception e) {
       throw new HoodieGlueSyncException("Fail to check if database exists " + databaseName, e);
     }
@@ -607,6 +620,7 @@ public class AWSGlueCatalogSyncClient extends HoodieSyncClient {
 
       UpdateTableRequest request =  UpdateTableRequest.builder().databaseName(databaseName)
           .tableInput(updatedTableInput)
+          .skipArchive(skipTableArchive)
           .build();
       awsGlue.updateTable(request);
       return true;
