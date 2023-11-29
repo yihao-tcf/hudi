@@ -200,7 +200,7 @@ public class Jdbc2Source extends RowSource {
               .from(properties.getString(Config.RDBMS_TABLE_NAME))
               .where(String.format("%s is not null", incrementalColumn))
               .groupBy(incrementalColumn)
-              .orderBy("count desc")
+              .orderBy("countNum desc")
               .limit(1);
       String query = String.format(ppdQuery, queryBuilder.toString());
       LOG.info("validate validateTableIncrementalColumnDuplicateNum query sql:" + query);
