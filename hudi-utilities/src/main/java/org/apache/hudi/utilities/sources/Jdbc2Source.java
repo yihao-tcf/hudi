@@ -194,19 +194,20 @@ public class Jdbc2Source extends RowSource {
     String incrementalColumn = properties.getString(Config.INCREMENTAL_COLUMN);
     if (!StringUtils.isNullOrEmpty(incrementalColumn) && properties.getBoolean(Config.IS_INCREMENTAL)) {
       final String ppdQuery = "(%s) rdbms_table";
-      final String countColumn = String.format("count(%s) as count", incrementalColumn);
+      final String countColumn = String.format("count(%s) as countNum", incrementalColumn);
       final SqlQueryBuilder queryBuilder = SqlQueryBuilder
               .select(incrementalColumn, countColumn)
               .from(properties.getString(Config.RDBMS_TABLE_NAME))
+              .where(String.format("%s is not null", incrementalColumn))
               .groupBy(incrementalColumn)
               .orderBy("count desc")
               .limit(1);
       String query = String.format(ppdQuery, queryBuilder.toString());
-      LOG.info("validate TableIncrementalColumnMax query sql:" + query);
+      LOG.info("validate validateTableIncrementalColumnDuplicateNum query sql:" + query);
       Dataset<Row> dataset = getDataFrameReader(session, properties).option(Config.RDBMS_TABLE_PROP, query).load();
       if (Objects.nonNull(dataset.first().get(1))) {
-        long dupCount = dataset.first().getLong(1);
-        if (sourceLimit > dupCount) {
+        long dupCount = dataset.withColumn("countNum", dataset.col("countNum").cast(DataTypes.LongType)).first().getLong(1);
+        if (sourceLimit < dupCount) {
           LOG.error(String.format("The incrementalColumn name is:%s "
                           +
                           "the current value grouped by incrementalColumn is:%s, and the number of duplicate checks is:%s."
@@ -216,7 +217,7 @@ public class Jdbc2Source extends RowSource {
                   dataset.first().get(0),
                   dupCount));
         }
-        throw new HoodieException(String.format("Jdbc2Source fetch Failed, sourceLimit:%s > number of duplicate checks:%s",
+        throw new HoodieException(String.format("Jdbc2Source fetch Failed, sourceLimit:%s < number of duplicate checks:%s",
                 sourceLimit,
                 dupCount));
       }
@@ -343,10 +344,12 @@ public class Jdbc2Source extends RowSource {
     if (!StringUtils.isNullOrEmpty(partitionColumnValue)) {
       SqlQueryBuilder sqlQueryBuilder = SqlQueryBuilder.select("*")
               .from(props.getString(Config.RDBMS_TABLE_NAME))
-              .where(MessageFormat.format("{0} is null or {0} = ''", partitionColumnValue));
+              .where(MessageFormat.format("{0} is null", partitionColumnValue));
       String query = String.format(ppdQuery, sqlQueryBuilder.toString());
+      LOG.info(String.format("remedy data for empty fields query sql:%s", query));
       fillEmptyDataset =  getDataFrameReader(this.sparkSession, this.props)
               .option(Config.RDBMS_TABLE_PROP, query).load();
+      LOG.info(String.format("fullFetch: Quantity of residual data for empty fields:%s", fillEmptyDataset.count()));
     }
 
     Dataset<Row> notNullDataset =  validatePropsAndGetDataFrameReader(this.sparkSession, this.props, lastCheckpoint).load();
