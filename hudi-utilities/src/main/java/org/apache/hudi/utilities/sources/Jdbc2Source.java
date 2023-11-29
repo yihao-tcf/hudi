@@ -365,7 +365,7 @@ public class Jdbc2Source extends RowSource {
     if (!StringUtils.isNullOrEmpty(partitionColumnValue)) {
       SqlQueryBuilder sqlQueryBuilder = SqlQueryBuilder.select("*")
               .from(getStringWithAltKeys(this.props, JdbcSourceConfig.RDBMS_TABLE_NAME))
-              .where(MessageFormat.format("{0} is null or {0} = ''", partitionColumnValue));
+              .where(MessageFormat.format("{0} is null", partitionColumnValue));
       String query = String.format(ppdQuery, sqlQueryBuilder.toString());
       LOG.info(String.format("remedy data for empty fields query sql:%s", query));
       fillEmptyDataset =  getDataFrameReader(this.sparkSession, this.props)
