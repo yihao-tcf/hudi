@@ -61,10 +61,24 @@ public class Jdbc2Source extends RowSource {
   private static final Logger LOG = LogManager.getLogger(Jdbc2Source.class);
   private static final List<String> DB_LIMIT_CLAUSE = Arrays.asList("mysql", "postgresql", "h2", "db2");
   private static final String URI_JDBC_PREFIX = "jdbc:";
-
+  private static final long COLUMN_NULLABLE_MAX_TOLERANCE = 500000;
+  private static final String COUNT_COLUMN_ALIAS = "countNum";
+  private static final String UPPER_BOUND_VAL_ALIAS = "upperVal";
+  private static final String LOWER_BOUND_VAL_ALIAS = "lowerVal";
+  private static final String PPD_QUERY = "(%s) rdbms_table";
   public Jdbc2Source(TypedProperties props, JavaSparkContext sparkContext, SparkSession sparkSession,
                      SchemaProvider schemaProvider) {
     super(props, sparkContext, sparkSession, schemaProvider);
+  }
+
+  /**
+    * column type enum
+    */
+  public enum ColumnType {
+    /**JdbcSource incremental column*/
+    INCREMENTAL,
+    /**spark datasource fetch size partition column*/
+    FETCH_PARTITION,
   }
 
   /**
@@ -184,42 +198,52 @@ public class Jdbc2Source extends RowSource {
    * Assuming that there is 200000 data in the updateDate field of my order table, which is equal to "2023-08-17 14:55 1:00:000"
    * will only obtain 100000 rows of data due to sourceLimit=100000, and will also lose 100000 rows of data.
    *
-   * @param session {@link SparkSession}
-   * @param properties The JDBC connection properties and data source options.
+   * @param column  column validate Table Column
    * @param sourceLimit Limit the amount of query data for tables
    */
-  private static void validateTableIncrementalColumnDuplicateNum(SparkSession session,
-                                                                 TypedProperties properties,
-                                                                 long sourceLimit) {
-    String incrementalColumn = properties.getString(Config.INCREMENTAL_COLUMN);
-    if (!StringUtils.isNullOrEmpty(incrementalColumn) && properties.getBoolean(Config.IS_INCREMENTAL)) {
-      final String ppdQuery = "(%s) rdbms_table";
-      final String countColumn = String.format("count(%s) as countNum", incrementalColumn);
+  private void validateTableColumnDuplicateNum(String column,
+                                               ColumnType columnType,
+                                               String where,
+                                               long sourceLimit) {
+    if (!StringUtils.isNullOrEmpty(column)) {
+      final String countColumn = String.format("count(1) as %s", COUNT_COLUMN_ALIAS);
       final SqlQueryBuilder queryBuilder = SqlQueryBuilder
-              .select(incrementalColumn, countColumn)
-              .from(properties.getString(Config.RDBMS_TABLE_NAME))
-              .where(String.format("%s is not null", incrementalColumn))
-              .groupBy(incrementalColumn)
-              .orderBy("countNum desc")
+              .select(column, countColumn)
+              .from(props.getString(Config.RDBMS_TABLE_NAME));
+      if (!StringUtils.isNullOrEmpty(where)) {
+        queryBuilder.where(where);
+      }
+      queryBuilder.groupBy(column)
+              .orderBy(String.format("%s desc", COUNT_COLUMN_ALIAS))
               .limit(1);
-      String query = String.format(ppdQuery, queryBuilder.toString());
-      LOG.info("validate validateTableIncrementalColumnDuplicateNum query sql:" + query);
-      Dataset<Row> dataset = getDataFrameReader(session, properties).option(Config.RDBMS_TABLE_PROP, query).load();
+
+      String query = String.format(PPD_QUERY, queryBuilder);
+      LOG.info("validate validateTableColumnDuplicateNum query sql:" + query);
+
+      Dataset<Row> dataset = getDataFrameReader(sparkSession, props).option(Config.RDBMS_TABLE_PROP, query).load();
       if (Objects.nonNull(dataset.first().get(1))) {
-        long dupCount = dataset.withColumn("countNum", dataset.col("countNum").cast(DataTypes.LongType)).first().getLong(1);
-        if (sourceLimit < dupCount) {
-          LOG.error(String.format("The incrementalColumn name is:%s "
+
+        long dupCount = dataset.withColumn(COUNT_COLUMN_ALIAS, dataset.col(COUNT_COLUMN_ALIAS).cast(DataTypes.LongType)).first().getLong(1);
+
+        LOG.info(String.format("The column type:%s, column name:%s, "
                           +
-                          "the current value grouped by incrementalColumn is:%s, and the number of duplicate checks is:%s."
-                          +
-                          "The set sourceLimit is greater than the number of duplicate checks",
-                  incrementalColumn,
+                          "current value grouped by column is:%s, and the number of duplicate checks is:%s.",
+                  columnType.name(),
+                  column,
                   dataset.first().get(0),
                   dupCount));
+
+        if (COLUMN_NULLABLE_MAX_TOLERANCE < dupCount) {
+          throw new HoodieException(String.format("Jdbc2Source fetch Failed, column nullable max tolerance:%s < number of duplicate checks:%s",
+                COLUMN_NULLABLE_MAX_TOLERANCE,
+                dupCount));
         }
-        throw new HoodieException(String.format("Jdbc2Source fetch Failed, sourceLimit:%s < number of duplicate checks:%s",
+
+        if (sourceLimit < dupCount) {
+          throw new HoodieException(String.format("Jdbc2Source fetch Failed, sourceLimit:%s < number of duplicate checks:%s",
                 sourceLimit,
                 dupCount));
+        }
       }
     }
   }
@@ -278,7 +302,6 @@ public class Jdbc2Source extends RowSource {
    */
   private Pair<Option<Dataset<Row>>, String> fetch(Option<String> lastCkptStr, long sourceLimit) {
     Dataset<Row> dataset;
-    validateTableIncrementalColumnDuplicateNum(sparkSession, props, sourceLimit);
     if (lastCkptStr.isPresent() && !StringUtils.isNullOrEmpty(lastCkptStr.get())) {
       dataset = incrementalFetch(lastCkptStr, sourceLimit);
     } else {
@@ -301,14 +324,18 @@ public class Jdbc2Source extends RowSource {
    */
   private Dataset<Row> incrementalFetch(Option<String> lastCheckpoint, long sourceLimit) {
     try {
-      final String ppdQuery = "(%s) rdbms_table";
+      final String whereExpr =  props.getString(Config.WHERE_EXPRESSION);
+      final String incrWhereExpr = String.format(" %s > '%s' or %s is null",
+              props.getString(Config.INCREMENTAL_COLUMN),
+              lastCheckpoint.get(),
+              props.getString(Config.INCREMENTAL_COLUMN));
+      final String where = props.getBoolean(Config.CUSTOM_CONDITION_PULL) ? whereExpr :
+              StringUtils.isNullOrEmpty(whereExpr) ? incrWhereExpr : incrWhereExpr + " and " + whereExpr;
+      validateTableColumnDuplicateNum(Config.INCREMENTAL_COLUMN, ColumnType.INCREMENTAL, where, sourceLimit);
       final SqlQueryBuilder queryBuilder = SqlQueryBuilder.select("*")
           .from(props.getString(Config.RDBMS_TABLE_NAME))
           //remedy data for empty fields
-          .where(String.format(" %s > '%s' or %s is null",
-                  props.getString(Config.INCREMENTAL_COLUMN),
-                  lastCheckpoint.get(),
-                  props.getString(Config.INCREMENTAL_COLUMN)));
+          .where(where);
 
       if (sourceLimit > 0) {
         URI jdbcURI = URI.create(props.getString(Config.URL).substring(URI_JDBC_PREFIX.length()));
@@ -316,7 +343,7 @@ public class Jdbc2Source extends RowSource {
           queryBuilder.orderBy(props.getString(Config.INCREMENTAL_COLUMN)).limit(sourceLimit);
         }
       }
-      String query = String.format(ppdQuery, queryBuilder.toString());
+      String query = String.format(PPD_QUERY, queryBuilder.toString());
       LOG.info("PPD QUERY: " + query);
       LOG.info(String.format("Referenced last checkpoint and prepared new predicate pushdown query for jdbc pull %s", query));
       return validatePropsAndGetDataFrameReader(sparkSession, props, lastCheckpoint).option(Config.RDBMS_TABLE_PROP, query).load();
@@ -338,21 +365,33 @@ public class Jdbc2Source extends RowSource {
   private Dataset<Row> fullFetch(Option<String> lastCheckpoint) {
     //remedy data for empty fields
     Dataset<Row> fillEmptyDataset = null;
-    String ppdQuery = "(%s) rdbms_table";
+    Dataset<Row> notNullDataset = null;
+
     String partitionColumnKey = Config.EXTRA_OPTIONS + "partitionColumn";
     String partitionColumnValue = this.props.getString(partitionColumnKey);
+
     if (!StringUtils.isNullOrEmpty(partitionColumnValue)) {
+      validateTableColumnDuplicateNum(partitionColumnValue, ColumnType.FETCH_PARTITION, null, Long.MAX_VALUE);
+
       SqlQueryBuilder sqlQueryBuilder = SqlQueryBuilder.select("*")
               .from(props.getString(Config.RDBMS_TABLE_NAME))
               .where(MessageFormat.format("{0} is null", partitionColumnValue));
-      String query = String.format(ppdQuery, sqlQueryBuilder.toString());
+      String query = String.format(PPD_QUERY, sqlQueryBuilder.toString());
       LOG.info(String.format("remedy data for empty fields query sql:%s", query));
       fillEmptyDataset =  getDataFrameReader(this.sparkSession, this.props)
               .option(Config.RDBMS_TABLE_PROP, query).load();
       LOG.info(String.format("fullFetch: Quantity of residual data for empty fields:%s", fillEmptyDataset.count()));
     }
 
-    Dataset<Row> notNullDataset =  validatePropsAndGetDataFrameReader(this.sparkSession, this.props, lastCheckpoint).load();
+    String where = this.props.getString(Config.WHERE_EXPRESSION);
+    if (!StringUtils.isNullOrEmpty(where)) {
+      updateFetchSizeProps(where);
+      String fullQuerySql = String.format(PPD_QUERY, SqlQueryBuilder.select("*").where(where));
+      notNullDataset =  validatePropsAndGetDataFrameReader(this.sparkSession, this.props, lastCheckpoint)
+              .option(Config.RDBMS_TABLE_PROP, fullQuerySql).load();
+    } else {
+      notNullDataset =  validatePropsAndGetDataFrameReader(this.sparkSession, this.props, lastCheckpoint).load();
+    }
     return fillEmptyDataset == null ? notNullDataset : notNullDataset.unionAll(fillEmptyDataset);
   }
 
@@ -362,7 +401,6 @@ public class Jdbc2Source extends RowSource {
    * @return The {@link Dataset} after running full scan.
    */
   private Dataset<Row> fullFetch(long sourceLimit) {
-    final String ppdQuery = "(%s) rdbms_table";
     final SqlQueryBuilder queryBuilder = SqlQueryBuilder.select("*")
         .from(props.getString(Config.RDBMS_TABLE_NAME));
     if (sourceLimit > 0) {
@@ -375,7 +413,7 @@ public class Jdbc2Source extends RowSource {
         }
       }
     }
-    String query = String.format(ppdQuery, queryBuilder.toString());
+    String query = String.format(PPD_QUERY, queryBuilder.toString());
     return validatePropsAndGetDataFrameReader(sparkSession, props, null).option(Config.RDBMS_TABLE_PROP, query).load();
   }  
 
@@ -396,6 +434,73 @@ public class Jdbc2Source extends RowSource {
       LOG.error("Failed to checkpoint");
       throw new HoodieException("Failed to checkpoint. Last checkpoint: " + lastCkptStr.orElse(null), e);
     }
+  }
+
+  /**
+  * dynamic update fetch size props
+  */
+  private void updateFetchSizeProps() {
+    updateFetchSizeProps(null);
+  }
+
+  /**
+   * dynamic update fetch size props
+   * @param where {@link String} query condition expr
+   */
+  private void updateFetchSizeProps(String where) {
+    //Calculate the metrics for fetch
+    String partitionColumnKey = Config.EXTRA_OPTIONS + "partitionColumn";
+    String partitionColumnValue = this.props.getString(partitionColumnKey);
+
+    String fetchSizeKey = Config.EXTRA_OPTIONS + "fetchSize";
+    long fetchSizeValue = this.props.getLong(fetchSizeKey);
+
+    String numPartitionsKey = Config.EXTRA_OPTIONS + "numPartitions";
+
+    String lowerBoundKey = Config.EXTRA_OPTIONS + "lowerBound";
+
+    String upperBoundKey = Config.EXTRA_OPTIONS + "upperBound";
+    SqlQueryBuilder sqlQueryBuilder =  SqlQueryBuilder
+              .select(MessageFormat.format("max({0}) as {1},min({0}) as {2},count(1) as {3}",
+                      partitionColumnValue, UPPER_BOUND_VAL_ALIAS, LOWER_BOUND_VAL_ALIAS, COUNT_COLUMN_ALIAS));
+    if (!StringUtils.isNullOrEmpty(where)) {
+      sqlQueryBuilder.where(where);
+    }
+
+    sqlQueryBuilder.groupBy(partitionColumnValue)
+            .orderBy(String.format("%s desc ", partitionColumnValue))
+            .limit(1);
+
+    String fetchSizeMetricsQuerySql = String.format(PPD_QUERY, sqlQueryBuilder);
+    Dataset<Row> fetchMetricsDataset =  getDataFrameReader(sparkSession, props)
+           .option(Config.RDBMS_TABLE_PROP, fetchSizeMetricsQuerySql).load();
+
+    Row firstRow = fetchMetricsDataset
+             // upper bound val cast string
+             .withColumn(UPPER_BOUND_VAL_ALIAS,
+                     fetchMetricsDataset.col(UPPER_BOUND_VAL_ALIAS)
+                             .cast(DataTypes.StringType))
+             //lower bound val cast string
+             .withColumn(LOWER_BOUND_VAL_ALIAS,
+                     fetchMetricsDataset.col(LOWER_BOUND_VAL_ALIAS)
+                             .cast(DataTypes.StringType))
+             // count column cast long
+             .withColumn(COUNT_COLUMN_ALIAS,
+                     fetchMetricsDataset.col(COUNT_COLUMN_ALIAS)
+                             .cast(DataTypes.LongType))
+             .first();
+
+    String newUpperBoundVal = firstRow.getString(0);
+    String newLowerBoundVal = firstRow.getString(1);
+    long countNum = firstRow.getLong(2);
+    long newFetchSizeValue = countNum / fetchSizeValue < 1 ? countNum : fetchSizeValue;
+    long newNumPartitionsVal = countNum == newFetchSizeValue ? 1 : (long) Math.ceil((double) countNum / fetchSizeValue);
+
+    this.props.setProperty(lowerBoundKey, newLowerBoundVal);
+    this.props.setProperty(upperBoundKey, newUpperBoundVal);
+    this.props.setProperty(fetchSizeKey, Long.toString(newFetchSizeValue));
+    this.props.setProperty(numPartitionsKey, Long.toString(newNumPartitionsVal));
+
   }
 
   /**
@@ -479,5 +584,16 @@ public class Jdbc2Source extends RowSource {
      * {@value #FALLBACK_TO_FULL_FETCH} is a boolean, which if set true, makes incremental fetch to fallback to full fetch in case of any error.
      */
     private static final String FALLBACK_TO_FULL_FETCH = "hoodie.deltastreamer.jdbc.incr.fallback.to.full.fetch";
+
+    /**
+     * {@value #WHERE_EXPRESSION} used to set condition expression the user specifies for jdbc.
+     */
+    private static final String WHERE_EXPRESSION = "hoodie.deltastreamer.jdbc.where.expression";
+
+    /**
+     * {@value #CUSTOM_CONDITION_PULL } If custom conditions are used, the incremental pull condition will be overwritten
+     */
+    private static final String CUSTOM_CONDITION_PULL = "hoodie.deltastreamer.jdbc.custom.condition.pull";
+
   }
 }
