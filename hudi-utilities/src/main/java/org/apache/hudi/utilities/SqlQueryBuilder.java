@@ -20,6 +20,8 @@
 package org.apache.hudi.utilities;
 
 import org.apache.hudi.common.util.StringUtils;
+import org.apache.hudi.utilities.util.CheckWhere;
+import org.apache.hudi.utilities.util.JdbcDataSourceUtil;
 
 /**
  * SQL query builder. Current support for: SELECT, FROM, JOIN, ON, WHERE, ORDER BY, LIMIT clauses.
@@ -27,7 +29,6 @@ import org.apache.hudi.common.util.StringUtils;
 public class SqlQueryBuilder {
 
   private final StringBuilder sqlBuilder;
-
   private SqlQueryBuilder(StringBuilder sqlBuilder) {
     this.sqlBuilder = sqlBuilder;
   }
@@ -105,6 +106,7 @@ public class SqlQueryBuilder {
     }
     sqlBuilder.append(" where ");
     sqlBuilder.append(predicate);
+    CheckWhere.checkWhere(" where " + predicate);
     return this;
   }
 
@@ -151,6 +153,36 @@ public class SqlQueryBuilder {
     }
     sqlBuilder.append(" limit ");
     sqlBuilder.append(count);
+    return this;
+  }
+
+  /**
+   * Appends a "limit" clause to a query.
+   *
+   * @param count The limit count.
+   * @param jdbcUrlSchema Grammar for distinguishing different dialects
+   * @return The {@link SqlQueryBuilder} instance.
+   */
+  public SqlQueryBuilder limit(long count, String jdbcUrlSchema) {
+    if (count < 0) {
+      throw new IllegalArgumentException("Please provide a positive integer for the LIMIT clause.");
+    }
+    switch (jdbcUrlSchema) {
+      case JdbcDataSourceUtil.MYSQL_SCHEMA_NAME:
+      case JdbcDataSourceUtil.DB2_SCHEMA_NAME:
+      case JdbcDataSourceUtil.PGSQL_SCHEMA_NAME:
+        sqlBuilder.append(" limit ")
+                  .append(count)
+                  .append(") t");
+        break;
+      case JdbcDataSourceUtil.ORACLE_SCHEMA_NAME:
+        sqlBuilder.append(")where ROWNUM <= ")
+                  .append(count);
+        break;
+      default:
+        throw new UnsupportedOperationException("The current data source is not supported:" + jdbcUrlSchema);
+    }
+
     return this;
   }
 

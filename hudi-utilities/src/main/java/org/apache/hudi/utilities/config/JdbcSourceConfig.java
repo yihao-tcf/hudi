@@ -115,4 +115,34 @@ public class JdbcSourceConfig extends HoodieConfig {
       .withAlternatives(DELTA_STREAMER_CONFIG_PREFIX + "jdbc.incr.fallback.to.full.fetch")
       .markAdvanced()
       .withDocumentation("If set true, makes incremental fetch to fallback to full fetch in case of any error");
+
+  public static final ConfigProperty<String> WHERE_EXPRESSION = ConfigProperty
+      .key(STREAMER_CONFIG_PREFIX + "jdbc.where.expression")
+      .noDefaultValue()
+      .withAlternatives(DELTA_STREAMER_CONFIG_PREFIX + "jdbc.where.expression")
+      .markAdvanced()
+      .withDocumentation("used to set condition expression the user specifies for jdbc.");
+
+  public static final ConfigProperty<Boolean> CUSTOM_CONDITION_PULL = ConfigProperty
+      .key(STREAMER_CONFIG_PREFIX + "jdbc.custom.condition.pull")
+      .defaultValue(false)
+      .withAlternatives(DELTA_STREAMER_CONFIG_PREFIX + "jdbc.custom.condition.pull")
+      .markAdvanced()
+      .withDocumentation("If custom conditions are used, the incremental pull condition will be overwritten.");
+
+  public static final ConfigProperty<String> PARTITION_COLUMN_TYPE = ConfigProperty
+      .key(STREAMER_CONFIG_PREFIX + "jdbc.partitionColumn.type")
+      .defaultValue("int")
+      .withAlternatives(DELTA_STREAMER_CONFIG_PREFIX + "jdbc.partitionColumn.type")
+      .markAdvanced()
+      .withDocumentation("Splitting key field types, supporting both numeric and string types");
+
+  public static final ConfigProperty<String> SHARD_PARTITION_MODE = ConfigProperty
+      .key(STREAMER_CONFIG_PREFIX + "jdbc.shard.partition.mode")
+      .defaultValue("quick")
+      .withAlternatives(DELTA_STREAMER_CONFIG_PREFIX + "jdbc.shard.partition.mode")
+      .markAdvanced()
+      .withDocumentation("Splitting method, accurate will ensure that only fetch is pulled each time_ Size data, sharding is relatively uniform, and there is concern that sharding may be slower; "
+              +
+              "Quick shards all data according to the number of concurrent shards, which may be faster but may not be evenly distributed.");
 }

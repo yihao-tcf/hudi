@@ -33,6 +33,7 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hudi.utilities.util.CustomShardSplitProvider;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.sql.Column;
 import org.apache.spark.sql.DataFrameReader;
@@ -46,19 +47,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
-import java.text.MessageFormat;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
+import java.util.Properties;
 
 import static org.apache.hudi.common.util.ConfigUtils.checkRequiredConfigProperties;
 import static org.apache.hudi.common.util.ConfigUtils.containsConfigProperty;
 import static org.apache.hudi.common.util.ConfigUtils.getBooleanWithAltKeys;
 import static org.apache.hudi.common.util.ConfigUtils.getStringWithAltKeys;
 import static org.apache.hudi.common.util.ConfigUtils.stripPrefix;
-
 
 /**
  * Reads data from RDBMS data sources.
@@ -67,11 +66,11 @@ import static org.apache.hudi.common.util.ConfigUtils.stripPrefix;
 public class Jdbc2Source extends RowSource {
 
   private static final Logger LOG = LoggerFactory.getLogger(Jdbc2Source.class);
-  private static final List<String> DB_LIMIT_CLAUSE = Arrays.asList("mysql", "postgresql", "h2", "db2");
+  private static final List<String> DB_LIMIT_CLAUSE = Arrays.asList("mysql", "postgresql", "h2", "db2", "oracle");
   private static final String URI_JDBC_PREFIX = "jdbc:";
 
   public Jdbc2Source(TypedProperties props, JavaSparkContext sparkContext, SparkSession sparkSession,
-                     SchemaProvider schemaProvider) {
+                    SchemaProvider schemaProvider) {
     super(props, sparkContext, sparkSession, schemaProvider);
   }
 
@@ -80,7 +79,6 @@ public class Jdbc2Source extends RowSource {
    *
    * @param session    The {@link SparkSession}.
    * @param properties The JDBC connection properties and data source options.
-   * @param lastCheckpoint Last checkpoint.
    * @return The {@link DataFrameReader} to read from RDBMS
    * @throws HoodieException
    */
@@ -133,7 +131,6 @@ public class Jdbc2Source extends RowSource {
     }
   }
 
-
   /**
      * get {@link DataFrameReader} to read from RDBMS.
      *
@@ -182,62 +179,52 @@ public class Jdbc2Source extends RowSource {
   }
 
   /**
-   *This function is to prompt for the issue of data with the same incremental column in the source table having a data volume greater than the sourceLimit.
-   * If the user is not prompted to adjust the correct sourceLimit or fetchSize, using jdbcSource may result in partial data loss.
-   *<br/>
-   *
-   * <p>
-   * Example: Assuming the source table order table has a total data volume of 5 million. Synchronize using deltasteamer JdbcSource
-   * </p>
-   * deltamer conf:<br/>
-   * <b>--hoodie-conf hoodie.deltastreamer.jdbc.incr.pull=true</b><br/>
-   * <b>--hoodie-conf hoodie.deltastreamer.jdbc.table.incr.column.name=update_date</b><br/>
-   * <b>--source-limit 100000</b><br/>
-   * <b>--continuous</b><br/>
-   *
-   * When deltasteamer synchronizes to 40w data, the current <b>lastCheckpoint=2023-08-17 14:55 0:00:00</b>
-   * So the SQL for {@link #incrementalFetch} Method to query source data is:<br/>
-   * select (select * from order where update_date>"2023-08-17 14:55 0:00:00" order by update_date limit 100000) rdbms_table.<br/>
-   * Assuming that there is 200000 data in the updateDate field of my order table, which is equal to "2023-08-17 14:55 1:00:000"
-   * will only obtain 100000 rows of data due to sourceLimit=100000, and will also lose 100000 rows of data.
-   *
-   * @param session {@link SparkSession}
-   * @param properties The JDBC connection properties and data source options.
-   * @param sourceLimit Limit the amount of query data for tables
-   */
-  private static void validateTableIncrementalColumnDuplicateNum(SparkSession session,
-                                                                 TypedProperties properties,
-                                                                 long sourceLimit) {
-    String incrementalColumn = getStringWithAltKeys(properties, JdbcSourceConfig.INCREMENTAL_COLUMN);
-    if (!StringUtils.isNullOrEmpty(incrementalColumn) && getBooleanWithAltKeys(properties, JdbcSourceConfig.IS_INCREMENTAL)) {
-      final String ppdQuery = "(%s) rdbms_table";
-      final String countColumn = String.format("count(%s) as countNum", incrementalColumn);
-      final SqlQueryBuilder queryBuilder = SqlQueryBuilder
-              .select(incrementalColumn, countColumn)
-              .from(getStringWithAltKeys(properties, JdbcSourceConfig.RDBMS_TABLE_NAME))
-              .where(String.format("%s is not null", incrementalColumn))
-              .groupBy(incrementalColumn)
-              .orderBy("countNum desc")
-              .limit(1);
-      String query = String.format(ppdQuery, queryBuilder.toString());
-      LOG.info("validate Table Incremental Column DuplicateNum query sql:{}", query);
-      Dataset<Row> dataset = getDataFrameReader(session, properties).option(Config.RDBMS_TABLE_PROP, query).load();
-      if (Objects.nonNull(dataset.first().get(1))) {
-        long dupCount = dataset.withColumn("countNum", dataset.col("countNum").cast(DataTypes.LongType)).first().getLong(1);
-        if (sourceLimit < dupCount) {
-          LOG.error("The incrementalColumn name is:{} "
-                          +
-                          "the current value grouped by incrementalColumn is:{}, and the number of duplicate checks is:{}."
-                          +
-                          "The set sourceLimit is greater than the number of duplicate checks",
-                  incrementalColumn,
-                  dataset.first().get(0),
-                  dupCount);
-        }
-        throw new HoodieException(String.format("Jdbc2Source fetch Failed, sourceLimit:%s < number of duplicate checks:%s",
-                sourceLimit,
-                dupCount));
+     * Fully fetch the jdbc predictions method get {@link Dataset<Row>} to read from RDBMS.
+     *
+     * @param session    The {@link SparkSession}.
+     * @param properties The JDBC connection properties and data source options.
+     * @param predicates Through precise sharding conditions, perform sharding data reading
+     * @return The {@link Dataset<Row>} to read from RDBMS Dataset
+     * @throws HoodieException
+     */
+  private static Dataset<Row> jdbcPredicatesGetDataset(final SparkSession session,
+                                                       final TypedProperties properties,
+                                                       final String[] predicates)
+       throws HoodieException {
+    FSDataInputStream passwordFileStream = null;
+    try {
+      Properties connectionProperties = new Properties();
+
+      connectionProperties.setProperty(
+              Config.URL_PROP, getStringWithAltKeys(properties, JdbcSourceConfig.URL));
+
+      connectionProperties.setProperty(
+              Config.USER_PROP, getStringWithAltKeys(properties, JdbcSourceConfig.USER));
+
+      connectionProperties.setProperty(
+              Config.DRIVER_PROP, getStringWithAltKeys(properties, JdbcSourceConfig.DRIVER_CLASS));
+
+      if (containsConfigProperty(properties, JdbcSourceConfig.PASSWORD)) {
+        LOG.info("Reading JDBC password from properties file....");
+        connectionProperties.setProperty(
+                Config.PASSWORD_PROP, getStringWithAltKeys(properties, JdbcSourceConfig.PASSWORD));
+      } else if (containsConfigProperty(properties, JdbcSourceConfig.PASSWORD_FILE)
+              && !StringUtils.isNullOrEmpty(getStringWithAltKeys(properties, JdbcSourceConfig.PASSWORD_FILE))) {
+        LOG.info(String.format("Reading JDBC password from password file %s", getStringWithAltKeys(properties, JdbcSourceConfig.PASSWORD_FILE)));
+        FileSystem fileSystem = FileSystem.get(session.sparkContext().hadoopConfiguration());
+        passwordFileStream = fileSystem.open(new Path(getStringWithAltKeys(properties, JdbcSourceConfig.PASSWORD_FILE)));
+        byte[] bytes = new byte[passwordFileStream.available()];
+        passwordFileStream.read(bytes);
+        connectionProperties.setProperty(Config.PASSWORD_PROP, new String(bytes));
       }
+      return session.read().jdbc(getStringWithAltKeys(properties, JdbcSourceConfig.URL),
+              getStringWithAltKeys(properties, JdbcSourceConfig.RDBMS_TABLE_NAME),
+              predicates,
+              connectionProperties);
+    } catch (Exception e) {
+      throw new HoodieException("Failed to jdbc predicates get dataset", e);
+    } finally {
+      IOUtils.closeStream(passwordFileStream);
     }
   }
 
@@ -264,7 +251,6 @@ public class Jdbc2Source extends RowSource {
       if (keyOption.isPresent()) {
         String key = keyOption.get();
         String value = properties.getString(prop);
-
         if (!StringUtils.isNullOrEmpty(value)) {
           LOG.info(String.format("Adding %s -> %s to jdbc options", key, value));
           dataFrameReader.option(key, value);
@@ -298,7 +284,6 @@ public class Jdbc2Source extends RowSource {
    */
   private Pair<Option<Dataset<Row>>, String> fetch(Option<String> lastCkptStr, long sourceLimit) {
     Dataset<Row> dataset;
-    validateTableIncrementalColumnDuplicateNum(sparkSession, props, sourceLimit);
     if (lastCkptStr.isPresent() && !StringUtils.isNullOrEmpty(lastCkptStr.get())) {
       dataset = incrementalFetch(lastCkptStr, sourceLimit);
     } else {
@@ -323,13 +308,18 @@ public class Jdbc2Source extends RowSource {
   private Dataset<Row> incrementalFetch(Option<String> lastCheckpoint, long sourceLimit) {
     try {
       final String ppdQuery = "(%s) rdbms_table";
+      String whereCondition = getStringWithAltKeys(props, JdbcSourceConfig.WHERE_EXPRESSION, "");
       final SqlQueryBuilder queryBuilder = SqlQueryBuilder.select("*")
-          .from(getStringWithAltKeys(props, JdbcSourceConfig.RDBMS_TABLE_NAME))
-          .where(String.format(" %s > '%s' or %s is null",
-                  getStringWithAltKeys(props, JdbcSourceConfig.INCREMENTAL_COLUMN),
-                  lastCheckpoint.get(),
-                  //remedy data for empty fields
-                  getStringWithAltKeys(props, JdbcSourceConfig.INCREMENTAL_COLUMN)));
+          .from(getStringWithAltKeys(props, JdbcSourceConfig.RDBMS_TABLE_NAME));
+      if (!StringUtils.isNullOrEmpty(whereCondition)) {
+        if (getBooleanWithAltKeys(props, JdbcSourceConfig.CUSTOM_CONDITION_PULL)) {
+          queryBuilder.where(whereCondition);
+        } else {
+          queryBuilder.where("(" + whereCondition  + ") and" + String.format(" %s > '%s'", getStringWithAltKeys(props, JdbcSourceConfig.INCREMENTAL_COLUMN), lastCheckpoint.get()));
+        }
+      } else {
+        queryBuilder.where(String.format(" %s > '%s'", getStringWithAltKeys(props, JdbcSourceConfig.INCREMENTAL_COLUMN), lastCheckpoint.get()));
+      }
 
       if (sourceLimit > 0) {
         URI jdbcURI = URI.create(getStringWithAltKeys(props, JdbcSourceConfig.URL).substring(URI_JDBC_PREFIX.length()));
@@ -353,31 +343,6 @@ public class Jdbc2Source extends RowSource {
   }
 
   /**
-   * @param lastCheckpoint last check point
-   * @return The {@link Dataset} after running full scan.
-   */
-  private Dataset<Row> fullFetch(Option<String> lastCheckpoint) {
-    //remedy data for empty fields
-    Dataset<Row> fillEmptyDataset = null;
-    String ppdQuery = "(%s) rdbms_table";
-    String partitionColumnKey = JdbcSourceConfig.EXTRA_OPTIONS.key() + "partitionColumn";
-    String partitionColumnValue = this.props.getString(partitionColumnKey);
-    if (!StringUtils.isNullOrEmpty(partitionColumnValue)) {
-      SqlQueryBuilder sqlQueryBuilder = SqlQueryBuilder.select("*")
-              .from(getStringWithAltKeys(this.props, JdbcSourceConfig.RDBMS_TABLE_NAME))
-              .where(MessageFormat.format("{0} is null", partitionColumnValue));
-      String query = String.format(ppdQuery, sqlQueryBuilder.toString());
-      LOG.info(String.format("remedy data for empty fields query sql:%s", query));
-      fillEmptyDataset =  getDataFrameReader(this.sparkSession, this.props)
-              .option(Config.RDBMS_TABLE_PROP, query).load();
-      LOG.info(String.format("fullFetch: Quantity of residual data for empty fields:%s", fillEmptyDataset.count()));
-    }
-
-    Dataset<Row> notNullDataset =  validatePropsAndGetDataFrameReader(this.sparkSession, this.props, lastCheckpoint).load();
-    return fillEmptyDataset == null ? notNullDataset : notNullDataset.unionAll(fillEmptyDataset);
-  }
-
-  /**
    * Does a full scan on the RDBMS data source.
    *
    * @return The {@link Dataset} after running full scan.
@@ -386,7 +351,7 @@ public class Jdbc2Source extends RowSource {
     final String ppdQuery = "(%s) rdbms_table";
     final SqlQueryBuilder queryBuilder = SqlQueryBuilder.select("*")
         .from(getStringWithAltKeys(props, JdbcSourceConfig.RDBMS_TABLE_NAME));
-    if (sourceLimit > 0 && sourceLimit != Long.MAX_VALUE) {
+    if (sourceLimit > 0) {
       URI jdbcURI = URI.create(getStringWithAltKeys(props, JdbcSourceConfig.URL).substring(URI_JDBC_PREFIX.length()));
       if (DB_LIMIT_CLAUSE.contains(jdbcURI.getScheme())) {
         if (containsConfigProperty(props, JdbcSourceConfig.INCREMENTAL_COLUMN)) {
@@ -398,6 +363,21 @@ public class Jdbc2Source extends RowSource {
     }
     String query = String.format(ppdQuery, queryBuilder.toString());
     return validatePropsAndGetDataFrameReader(sparkSession, props, null).option(Config.RDBMS_TABLE_PROP, query).load();
+  }
+
+  /**
+   * Does a full scan on the RDBMS data source.
+   *
+   * @return The {@link Dataset} after running full scan.
+   */
+  private Dataset<Row> fullFetch(Option<String> lastCheckpoint) {
+    String[] rangeValues = new CustomShardSplitProvider<>(getDataFrameReader(sparkSession, props), props).getRangeValues();
+    LOG.info("calculate ranges:" + Arrays.toString(rangeValues));
+    if (getStringWithAltKeys(props, JdbcSourceConfig.SHARD_PARTITION_MODE).equals(CustomShardSplitProvider.ShardSplitMode.accurate.name())) {
+      return jdbcPredicatesGetDataset(sparkSession, props, rangeValues);
+    } else {
+      return validatePropsAndGetDataFrameReader(sparkSession, props, lastCheckpoint).load();
+    }
   }
 
   private String checkpoint(Dataset<Row> rowDataset, boolean isIncremental, Option<String> lastCkptStr) {
