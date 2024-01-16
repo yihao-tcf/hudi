@@ -70,7 +70,7 @@ public class AccuratePartitionOneBlock<K extends Comparable> extends PartitionOn
     if (!Objects.nonNull(dataset.first().get(0))) {
       return lastPartitionVal;
     }
-    return generifyKeyFromSqlResult(dataset.first());
+    return generifyKeyFromSqlResult(dataset);
   }
 
   public String getFetchSQLFormat(K lastPartitionVal) {
@@ -88,7 +88,7 @@ public class AccuratePartitionOneBlock<K extends Comparable> extends PartitionOn
     subSqlQueryBuilder.orderBy(partitionColumn);
     subSqlQueryBuilder.limit(fetchSize, jdbcUrlSchema);
 
-    String sql = SqlQueryBuilder.select("max(" + partitionColumn + ") as nums").from("(" + subSqlQueryBuilder).toString();
+    String sql = SqlQueryBuilder.select("max(" + partitionColumn + ") as " + NUMBER_VALUE_ALIAS).from("(" + subSqlQueryBuilder).toString();
     LOG.info("accurate partition one block fetchSize sql:" + sql);
     return sql;
   }

@@ -28,12 +28,13 @@ import org.apache.hudi.utilities.SqlQueryBuilder;
 import org.apache.hudi.utilities.config.JdbcSourceConfig;
 import org.apache.hudi.utilities.exception.HoodieReadFromSourceException;
 import org.apache.hudi.utilities.schema.SchemaProvider;
+import org.apache.hudi.utilities.util.CustomShardSplitProvider;
 
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IOUtils;
-import org.apache.hudi.utilities.util.CustomShardSplitProvider;
+
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.sql.Column;
 import org.apache.spark.sql.DataFrameReader;
@@ -43,15 +44,18 @@ import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.functions;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.storage.StorageLevel;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 
 import static org.apache.hudi.common.util.ConfigUtils.checkRequiredConfigProperties;
 import static org.apache.hudi.common.util.ConfigUtils.containsConfigProperty;
@@ -371,9 +375,13 @@ public class Jdbc2Source extends RowSource {
    * @return The {@link Dataset} after running full scan.
    */
   private Dataset<Row> fullFetch(Option<String> lastCheckpoint) {
-    String[] rangeValues = new CustomShardSplitProvider<>(getDataFrameReader(sparkSession, props), props).getRangeValues();
-    LOG.info("calculate ranges:" + Arrays.toString(rangeValues));
-    if (getStringWithAltKeys(props, JdbcSourceConfig.SHARD_PARTITION_MODE).equals(CustomShardSplitProvider.ShardSplitMode.accurate.name())) {
+    Map<String, Object> map = new HashMap<>();
+    props.forEach((key, val) -> map.put((String) key, val));
+    String shardSplitMode = getStringWithAltKeys(map, JdbcSourceConfig.SHARD_PARTITION_MODE);
+    String[] rangeValues = new CustomShardSplitProvider<>(getDataFrameReader(sparkSession, props), shardSplitMode,  props).getRangeValues();
+    LOG.info("shardSplitMode:{} calculate ranges:{}",shardSplitMode, Arrays.toString(rangeValues));
+
+    if (shardSplitMode.equals(CustomShardSplitProvider.ShardSplitMode.accurate.name())) {
       return jdbcPredicatesGetDataset(sparkSession, props, rangeValues);
     } else {
       return validatePropsAndGetDataFrameReader(sparkSession, props, lastCheckpoint).load();

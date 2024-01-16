@@ -9,6 +9,9 @@ import org.apache.hudi.utilities.config.JdbcSourceConfig;
 import org.apache.spark.sql.DataFrameReader;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
+import org.apache.spark.sql.types.DataType;
+import org.apache.spark.sql.types.DataTypes;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,10 +33,11 @@ public abstract class PartitionOneBlock<K extends Comparable> {
   String partitionColumn;
   long fetchSize;
   DataFrameReader dataFrameReader;
-  static final String JDBC_FETCH_SIZE_LOWER_BOUND_KEY =  JdbcSourceConfig.EXTRA_OPTIONS + "lowerBound";
-  static final String JDBC_FETCH_SIZE_UPPER_BOUND_KEY =  JdbcSourceConfig.EXTRA_OPTIONS + "upperBound";
-  static final String JDBC_FETCH_SIZE_NUM_PARTITIONS_KEY =  JdbcSourceConfig.EXTRA_OPTIONS + "numPartitions";
+  static final String JDBC_FETCH_SIZE_LOWER_BOUND_KEY =  JdbcSourceConfig.EXTRA_OPTIONS.key() + "lowerBound";
+  static final String JDBC_FETCH_SIZE_UPPER_BOUND_KEY =  JdbcSourceConfig.EXTRA_OPTIONS.key() + "upperBound";
+  static final String JDBC_FETCH_SIZE_NUM_PARTITIONS_KEY =  JdbcSourceConfig.EXTRA_OPTIONS.key() + "numPartitions";
   static final long PARALLELISM_THRESHOLD = 50;
+  static final String NUMBER_VALUE_ALIAS = "numVal";
   final String ppdQuery = "(%s) rdbms_table";
 
   public PartitionOneBlock(TypedProperties props, DataFrameReader dataFrameReader,
@@ -51,7 +55,7 @@ public abstract class PartitionOneBlock<K extends Comparable> {
 
   public String getMaxPartitionColumnSql(Boolean isMax) {
     SqlQueryBuilder sqlQueryBuilder = SqlQueryBuilder
-            .select((isMax ? "max(" : "min(") + partitionColumn + ") as nums")
+            .select((isMax ? "max(" : "min(") + partitionColumn + ") as " + NUMBER_VALUE_ALIAS)
             .from(tableName);
 
     if (!StringUtils.isNullOrEmpty(filter)) {
@@ -68,19 +72,19 @@ public abstract class PartitionOneBlock<K extends Comparable> {
       //for empty table.
       throw new HoodieException("for empty table. table");
     }
-    return generifyKeyFromSqlResult(dataset.first());
+    return generifyKeyFromSqlResult(dataset);
   }
 
-  protected K generifyKeyFromSqlResult(Row result) {
+  protected K generifyKeyFromSqlResult(Dataset<Row> result) {
     switch (partitionColumnType) {
       case Int:
       case BigInt:
       case Short:
       case Long:
       case BigDecimal:
-        return (K) Long.valueOf(result.getLong(0));
+        return (K) Long.valueOf(dataSetNumToDataType(result, DataTypes.LongType).getLong(0));
       case String:
-        return (K) result.getString(0);
+        return (K) dataSetNumToDataType(result, DataTypes.StringType).getString(0);
       default:
         throw new ClassCastException("unsupported class type: " + partitionColumnType);
     }
@@ -134,6 +138,16 @@ public abstract class PartitionOneBlock<K extends Comparable> {
     this.props.setProperty("hoodie.upsert.shuffle.parallelism", Long.toString(parallelism));
     this.props.setProperty("hoodie.delete.shuffle.parallelism", Long.toString(parallelism));
     this.props.setProperty("hoodie.bulkinsert.shuffle.parallelism", Long.toString(parallelism));
+  }
+
+  public void setFetchSizeRanges(String maxPartitionVal, String minPartitionVal, String numPartitions) {
+    props.setProperty(JDBC_FETCH_SIZE_LOWER_BOUND_KEY, minPartitionVal);
+    props.setProperty(JDBC_FETCH_SIZE_UPPER_BOUND_KEY, maxPartitionVal);
+    props.setProperty(JDBC_FETCH_SIZE_NUM_PARTITIONS_KEY, numPartitions);
+  }
+
+  public Row dataSetNumToDataType(Dataset<Row> dataset, DataType dataType)  {
+    return  dataset.withColumn(NUMBER_VALUE_ALIAS, dataset.col(NUMBER_VALUE_ALIAS).cast(dataType)).first();
   }
 
 }
