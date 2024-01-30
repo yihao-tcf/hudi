@@ -299,6 +299,7 @@ public class Jdbc2Source extends RowSource {
     boolean isIncremental = getBooleanWithAltKeys(props, JdbcSourceConfig.IS_INCREMENTAL);
     Pair<Option<Dataset<Row>>, String> pair = Pair.of(Option.of(dataset), checkpoint(dataset, isIncremental, lastCkptStr));
     dataset.unpersist();
+    dynamicSetDefaultParallelismForBuildProfile();
     return pair;
   }
 
@@ -404,6 +405,18 @@ public class Jdbc2Source extends RowSource {
     } catch (Exception e) {
       LOG.error("Failed to checkpoint");
       throw new HoodieReadFromSourceException("Failed to checkpoint. Last checkpoint: " + lastCkptStr.orElse(null), e);
+    }
+  }
+
+  private void dynamicSetDefaultParallelismForBuildProfile() {
+    String sql = String.format("(%s) rdbms_table", SqlQueryBuilder.select("count(1) as countVal").from(getStringWithAltKeys(props, JdbcSourceConfig.RDBMS_TABLE_NAME)));
+    Dataset<Row> dataset = getDataFrameReader(sparkSession, props).option("dbtable", sql).load();
+
+    long dataTotal  = dataset.withColumn("countVal", dataset.col("countVal").cast(DataTypes.LongType)).first().getLong(0);
+    dataTotal = (long) Math.floor((double) dataTotal / 450000);
+    if (dataTotal > Long.parseLong(sparkSession.conf().get("spark.default.parallelism"))) {
+      sparkSession.conf().set("spark.default.parallelism", dataTotal);
+      LOG.info("dynamic set spark.default.parallelism -> {}", dataTotal);
     }
   }
 
