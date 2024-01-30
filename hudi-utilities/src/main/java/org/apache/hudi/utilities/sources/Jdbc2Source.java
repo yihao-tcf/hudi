@@ -409,9 +409,17 @@ public class Jdbc2Source extends RowSource {
   }
 
   private void dynamicSetDefaultParallelismForBuildProfile() {
-    String sql = String.format("(%s) rdbms_table", SqlQueryBuilder.select("count(1) as countVal").from(getStringWithAltKeys(props, JdbcSourceConfig.RDBMS_TABLE_NAME)));
+    String partitionColumn  = new CustomShardSplitProvider<>(getDataFrameReader(sparkSession, props), CustomShardSplitProvider.ShardSplitMode.quick.name(),  props).getPartitionColumn();
+    SqlQueryBuilder query = SqlQueryBuilder.select("count(1) as countVal").from(getStringWithAltKeys(props, JdbcSourceConfig.RDBMS_TABLE_NAME));
+    if (!StringUtils.isNullOrEmpty(partitionColumn)) {
+      query.orderBy(partitionColumn);
+    } else {
+      if (getBooleanWithAltKeys(props, JdbcSourceConfig.IS_INCREMENTAL)) {
+        query.orderBy(getStringWithAltKeys(props, JdbcSourceConfig.INCREMENTAL_COLUMN));
+      }
+    }
+    String sql = String.format("(%s) rdbms_table", query);
     Dataset<Row> dataset = getDataFrameReader(sparkSession, props).option("dbtable", sql).load();
-
     long dataTotal  = dataset.withColumn("countVal", dataset.col("countVal").cast(DataTypes.LongType)).first().getLong(0);
     dataTotal = (long) Math.floor((double) dataTotal / 450000);
     if (dataTotal > Long.parseLong(sparkSession.conf().get("spark.default.parallelism"))) {

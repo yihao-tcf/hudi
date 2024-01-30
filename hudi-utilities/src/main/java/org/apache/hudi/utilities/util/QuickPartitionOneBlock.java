@@ -43,6 +43,6 @@ public class QuickPartitionOneBlock<K extends Comparable> extends PartitionOneBl
 
   @Override
   protected String getFetchSQLFormat() {
-    return SqlQueryBuilder.select("count(1) as " + NUMBER_VALUE_ALIAS).from(tableName).toString();
+    return SqlQueryBuilder.select("count(1) as " + NUMBER_VALUE_ALIAS).from(tableName).orderBy(partitionColumn).toString();
   }
 }

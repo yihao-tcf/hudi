@@ -27,12 +27,12 @@ public class CustomShardSplitProvider<K extends Comparable> {
 
   private TypedProperties props;
 
-  String filter;
-  String jdbcUrlSchema;
-  SqlType.SqlTypes partitionColumnType;
-  String tableName;
-  String partitionColumn;
-  long fetchSize;
+  private String filter;
+  private String jdbcUrlSchema;
+  private SqlType.SqlTypes partitionColumnType;
+  private String tableName;
+  private String partitionColumn;
+  private long fetchSize;
 
   private static final String URI_JDBC_PREFIX = "jdbc:";
 
@@ -84,5 +84,9 @@ public class CustomShardSplitProvider<K extends Comparable> {
     quick,
     accurate
 
+  }
+
+  public String getPartitionColumn() {
+    return partitionColumn;
   }
 }
