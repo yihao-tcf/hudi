@@ -179,6 +179,11 @@ public class SqlQueryBuilder {
         sqlBuilder.append(")where ROWNUM <= ")
                   .append(count);
         break;
+      case JdbcDataSourceUtil.SQLSERVER_SCHEMA_NAME:
+        sqlBuilder.append(" offset 0 rows fetch first ")
+                  .append(count)
+                  .append(" rows only) t");
+        break;
       default:
         throw new UnsupportedOperationException("The current data source is not supported:" + jdbcUrlSchema);
     }

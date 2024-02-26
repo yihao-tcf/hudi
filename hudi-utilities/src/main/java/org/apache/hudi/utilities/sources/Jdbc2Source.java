@@ -70,7 +70,7 @@ import static org.apache.hudi.common.util.ConfigUtils.stripPrefix;
 public class Jdbc2Source extends RowSource {
 
   private static final Logger LOG = LoggerFactory.getLogger(Jdbc2Source.class);
-  private static final List<String> DB_LIMIT_CLAUSE = Arrays.asList("mysql", "postgresql", "h2", "db2", "oracle");
+  private static final List<String> DB_LIMIT_CLAUSE = Arrays.asList("mysql", "postgresql", "h2", "db2", "oracle", "sqlserver");
   private static final String URI_JDBC_PREFIX = "jdbc:";
 
   public Jdbc2Source(TypedProperties props, JavaSparkContext sparkContext, SparkSession sparkSession,
@@ -299,7 +299,7 @@ public class Jdbc2Source extends RowSource {
     boolean isIncremental = getBooleanWithAltKeys(props, JdbcSourceConfig.IS_INCREMENTAL);
     Pair<Option<Dataset<Row>>, String> pair = Pair.of(Option.of(dataset), checkpoint(dataset, isIncremental, lastCkptStr));
     dataset.unpersist();
-    dynamicSetDefaultParallelismForBuildProfile();
+    //dynamicSetDefaultParallelismForBuildProfile();
     return pair;
   }
 

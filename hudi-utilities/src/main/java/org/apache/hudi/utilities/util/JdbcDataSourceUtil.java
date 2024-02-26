@@ -15,6 +15,7 @@ public class JdbcDataSourceUtil {
   public static final String PGSQL_SCHEMA_NAME = "postgresql";
   public static final String ORACLE_SCHEMA_NAME = "oracle";
   public static final String DB2_SCHEMA_NAME = "db2";
+  public static final String SQLSERVER_SCHEMA_NAME = "sqlserver";
 
   public static String getDiffSchemaValueQuote(String jdbcUrlSchema) {
     switch (jdbcUrlSchema) {
@@ -23,6 +24,7 @@ public class JdbcDataSourceUtil {
       case JdbcDataSourceUtil.ORACLE_SCHEMA_NAME:
       case JdbcDataSourceUtil.DB2_SCHEMA_NAME:
       case JdbcDataSourceUtil.PGSQL_SCHEMA_NAME:
+      case JdbcDataSourceUtil.SQLSERVER_SCHEMA_NAME:
         return "'";
       default:
         throw new UnsupportedOperationException("current scheme value quote not supported. Only support mysql and oracle and postgresql and db2");

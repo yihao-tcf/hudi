@@ -20,8 +20,10 @@ public class SqlType {
         return getSqlTypeFromDb2(lowercaseType);
       case JdbcDataSourceUtil.PGSQL_SCHEMA_NAME:
         return getSqlTypeFromPostgresql(lowercaseType);
+      case JdbcDataSourceUtil.SQLSERVER_SCHEMA_NAME:
+        return getSqlTypeFromSqlServer(lowercaseType);
       default:
-        throw new UnsupportedOperationException("current scheme  not supported. Only support mysql and oracle and postgresql and db2");
+        throw new UnsupportedOperationException("current scheme  not supported. Only support mysql and oracle and postgresql and db2 and mssql");
     }
   }
 
@@ -256,6 +258,55 @@ public class SqlType {
                     +
                 " Please try to change the column data type or don't transmit this column.", lowercaseType)
         );
+    }
+  }
+
+  public static SqlTypes getSqlTypeFromSqlServer(String lowercaseType) {
+    switch (lowercaseType) {
+      case "bit" :
+        return SqlTypes.Boolean;
+      case "smallint":
+      case "tinyint":
+        return SqlTypes.Short;
+      case "int":
+      case "int identity":
+      case "integer":
+        return SqlTypes.Int;
+      case "bigint":
+        return SqlTypes.Long;
+      case "timestamp":
+      case "datetime":
+      case "datetime2":
+        return SqlTypes.Timestamp;
+      case "date":
+        return SqlTypes.Date;
+      case "time":
+        return SqlTypes.Time;
+      case "float":
+        return SqlTypes.Float;
+      case "double precision":
+      case "real":
+        return SqlTypes.Double;
+      case "numeric":
+      case "decimal":
+        return SqlTypes.BigDecimal;
+      case "char":
+      case "varchar":
+      case "text":
+      case "nchar":
+      case "nvarchar":
+      case "ntext":
+        return SqlTypes.String;
+      case "binary":
+      case "varbinary":
+      case "image":
+        return SqlTypes.Bytes;
+      default:
+        throw new HoodieException(
+                  String.format("SqlServer: The column data type in your configuration is not support. Column type:[%s]."
+                          +
+                          " Please try to change the column data type or don't transmit this column.", lowercaseType)
+          );
     }
   }
 
